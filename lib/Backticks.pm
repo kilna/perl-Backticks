@@ -2,12 +2,7 @@ package Backticks;
 
 use Exporter qw();
 @ISA = qw(Exporter);
-@EXPORT_OK = qw(
-    config last_run run rerun reset as_table command error returncode
-    stdout stderr merged coredump exitcode signal error_verbose success
-    autodie chomped compat debug errmerge
-);
-%EXPORT_TAGS = ( 'all' => \@EXPORT_OK );
+@EXPORT_OK = qw(run config rerun reset as_table command error returncode stdout stderr merged coredump exitcode signal error_verbose success);
 
 use 5.006;
 use strict;
@@ -15,34 +10,70 @@ use warnings;
 
 use Filter::Simple;
 use File::Temp qw(tempfile);
-use Carp qw(croak confess);
+use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use Scope::Upper qw(localize UP);
+use Scope::Upper qw(localize context_info HERE UP);
 use IPC::Open3;
 use overload '""' => \&_stringify; # Stringification shows the command's STDOUT or merged output 
 use constant { FUNCTION => 1, CLASS => 2, INSTANCE => 3 }; # used with _call_type()
-use warnings::register;
 
 # Always report errors from a context outside of this package
 $Carp::Internal{ (__PACKAGE__) }++;
 
-our $VERSION = '1.9.0_01';
-$VERSION = eval $VERSION;
+our $VERSION = '1.9.0_02';
 
-# Default values for all object fields
-my %f_defaults = (
-    # These fields have blank defaults
-    ( map { $_ => '' } qw(command error stdout stderr merged) ),
-    # These fields have zero defaults
-    ( map { $_ => 0  } qw(returncode debug autodie chomped compat errmerge) ),
+# Some hashes that store information about Backticks object fields
+my (
+    %f_defaults,     # Default values for fields
+    %f_settable,     # Whether the field is writeable on object creation
+    %f_causes_reset, # Whether the setting of the field causes object reset
+    %f_resets,       # Whether a field is deleted when the object is reset
+    %f_config,       # Fields which indicate configuration
 );
-# These object fields are settable
-my %f_settable = map { $_ => 1 } qw(command autodie chomped compat debug errmerge);
-# These settable object fields cause the object to be reset when the
-# trigger field is set
-my %f_resets = map { $_ => 1 } qw(error stdout stderr returncode);
-# These object fields determine object behavior
-my %f_config = map { $_ => 1 } qw(autodie chomped compat debug errmerge);
+
+sub _init_obj ($@) {
+    my $self = shift;
+    $self->reset;
+    foreach my $var (keys %f_config) {
+        my $var = ref($self).'::'.$var;
+        my $val = eval { no strict 'refs'; ${$var} };
+        defined($val) || $self->_warn(
+            "Config package variable \$$var no longer valid in "
+            . __PACKAGE__ . ' version ' . $VERSION . ".  Use "
+            . __PACKAGE__ . '::config(...) instead'
+        );
+    }
+    return unless @_;
+    # Set the command
+    $self->_set( 'command', shift @_ );
+    # Set all of the fields passed in
+    my %params = _parse_config_list(@_);
+    $self->_set( $_, $params{$_} ) foreach keys %params;
+}
+
+BEGIN {
+    # Default values for all object fields
+    %f_defaults = (
+        # These fields have blank defaults
+        ( map { $_ => '' } qw(command error stdout stderr merged) ),
+        # These fields have zero defaults
+        ( map { $_ => 0  } qw(returncode debug autodie chomped compat merge) ),
+        'warnings' => 1,
+    );
+    # These object fields are settable
+    %f_settable = map { $_ => 1 } qw(command debug autodie chomped compat warnings);
+    # These settable object fields cause the object to be reset when the
+    # trigger field is set
+    %f_causes_reset = map { $_ => 1 } qw(command);
+    # These object fields are deleted when the ->reset method is called
+    %f_resets = map { $_ => 1 } qw(error stdout stderr returncode);
+    # These object fields determine object behavior
+    %f_config = map { $_ => 1 } qw(autodie chomped compat debug merge warnings);
+    # This object stores the current scope's config, and its elements are
+    # overridden via localized changes in a given scope
+    our $self = bless { %f_defaults }, __PACKAGE__;
+    $self->_init_obj;
+}
 
 # Implement the source filter in Filter::Simple
 FILTER_ONLY quotelike => sub {
@@ -69,78 +100,83 @@ sub _call_type ($) {
     return FUNCTION unless defined($source) && $source->isa(__PACKAGE__);
     return INSTANCE if blessed($source);
     return CLASS unless ref($source);
-    return FUNCTION; # In theory we should never get here, none of our subs
-                     # take an unblessed reference as the first param
+    return FUNCTION; # In theory we should never get here
 }
 
-sub _resolve_pkg ($) {
-    my $args = shift @_;
-    my $source = $args->[0];
-    return __PACKAGE__ unless defined $source;
-    return ref($source) if blessed($source) && $source->isa(__PACKAGE__);
-    return $source if !ref($source) && $source->isa(__PACKAGE__);
-    return __PACKAGE__;
+# Find the next calling context (as per Scope::Upper) which isn't related
+# to this object
+sub _calling_context ($) {
+    my $context = HERE;
+    while ( my $context = UP $context ) {
+        next if (context_info($context))[0]->isa(__PACKAGE__);
+    }
+    croak "Unable to resolve calling context!";
 }
 
 # Resolve to an object regardless of whether a sub was called as
 # a class method, object method or a function.  This modifies the
 # passed in caller's @_ so that only parameters to the call are left
-sub _self ($@) {
+sub _self ($) {
+
     my $args = shift @_; # A reference to @_ in our caller
     my $call_type = _call_type $args;
-    my $class = _resolve_pkg $args;
+
+    no strict 'refs';
     my $self;
-    if ( $call_type == INSTANCE ) {
-        $self = shift @$args;
-    }
-    else {
-        no strict 'refs';
-        $self = ${ $class.'::last_run' };
-        if ( $call_type == CLASS ) { shift @$args; }
-    }
-    return wantarray ? ($self, $call_type, $class) : $self;
+    if    ( $call_type == INSTANCE ) { $self = shift @$args                  }
+    elsif ( $call_type == CLASS    ) { $self = ${shift(@$args).'::last_run'} }
+    elsif ( $call_type == FUNCTION ) { $self = ${'Backticks::last_run'}      }
+
+    return wantarray ? ($self, $call_type) : $self;
 }
 
 # Generic accessor to get the field for the current object (if called
 # as an instance method) or the last run's object (if called as a class
 # method)
 sub _get (@) {
+
     # Resolve the object being operated upon (class or instance)
     my $self = _self \@_;
     my $field = shift @_; # The field being requested for this object
+    
     exists( $f_defaults{$field} ) || croak "Unrecognized field '$field'";
+
     # Firstly, try to get the value from the object
     return $self->{$field} if defined( $self->{$field} );
+    
     # If not found in context params, then get the value from the local config
     # stored in Backticks::last_run
     if ( $f_config{$field} ) {
-        my $var = eval { no strict 'refs'; ${ ref($self).'::'.$field } };
+        my $var = eval { no strict 'refs'; ${ref($self).'::last_run'}->{$field} };
         return $var if defined( $var );
     }
+
     # Otherwise return the default value for the field
     return $f_defaults{$field};
-}
-
-sub _get_config ($;$) {
-    my $var = pop;
-    if ( _call_type(\@_) == INSTANCE ) { return shift(@_)->_get($var); }
-    no strict 'refs';
-    return ${ _resolve_pkg(\@_).'::'.$var };
 }
 
 sub _set (@) {
     # Resolve the object being operated upon (class or instance)
     my ($self, $call_type)  = _self \@_;
     my $field = shift @_; # The field being operated upon for this object
-    my $val   = shift @_;
+    
     exists( $f_defaults{$field} ) || croak "Unrecognized field '$field'";
-    croak "Field '$field' cannot be set." unless $f_settable{$field};
-    $self->{$field} = $val;
+
+    if ( scalar @_ ) {
+        croak "Field '$field' cannot be set." unless $f_settable{$field};
+        if ( $call_type == INSTANCE || not $f_config{$field} ) {
+            $self->{$field} = shift @_;
+            $self->reset if $f_causes_reset{$field};
+        }
+        else {
+            localize_elem '%$'.ref($self).'::last_run', $field, shift @_;
+        }
+    }
 }
 
 sub _stringify {
     my $self = _self \@_;
-    return $self->errmerge ? $self->merged : $self->stdout; 
+    return $self->merge ? $self->merged : $self->stdout; 
 }
 
 =head1 NAME
@@ -219,7 +255,7 @@ You can combine multiple parameters:
 You can also explicitly disable parameters which are enabled
 by using a minus:
 
-    Backticks::config '-autodie';
+    Backticks::config '-warnings';
 
 Configuration is local to the block that Backticks::config is run in.
 
@@ -248,7 +284,7 @@ output chomped, or at least it's rare when chomping will cause a problem.
 If set, then the subprocess's STDERR will be echoed to the perl
 process's STDERR in realtime.  Perl's normal backticks operate this way.
 
-The Backticks assumes you want to manage the errors after the fact, but 
+By default Backticks assumes you want to manage the errors after the fact, but 
 this may hinder error output that used to show up from being displayed.  
 Enable this feature to mimick Perl's native behavior more closely.
 
@@ -260,19 +296,24 @@ If you are running deployment scripts in which the output of every command
 needs to be logged, this can be a handy way of showing everything about each
 command which was run.
 
-=head2 +errmerge
+=head2 +merge
 
 If set, then the object stringifies to the merged output including both STDERR 
-and STDOUT, rather than the default of only STDOUT.  If your command originally
-would have had a 2>&1 at the end of it, you probably want this option.
+and STDOUT, rather than the default of only STDOUT
+
+=head2 -warnings
+
+If unset, then warnings about potential misuse of redirection, depricated 
+interfaces, etc. will be disabled.
 
 =cut
 
 sub config (@) {
-    my $class = _resolve_pkg \@_;
-    shift(@_) if _call_type \@_ == CLASS;
+    my $self = _self \@_;
     my %config = _parse_config_list(@_);
-    localize( '$'.$class.'::'.$_, $config{$_}, UP UP ) foreach keys %config;
+    foreach my $field (keys %config) {
+        $self->_set( $field, $config{$field} );
+    }
 }
 
 sub _parse_config_list {
@@ -293,6 +334,7 @@ sub _parse_config_list {
     return %config;
 }
 
+
 =head2 Backticks->new( 'command' [ , @params ] )
 
 Creates a new Backticks object but does not execute the command yet.
@@ -300,37 +342,15 @@ The optional @params list can contain config() settings.  For example:
 
     my $obj = Backticks->new( 'ls -la', '+autodie' );
 
-=head2 $obj->dup()
-
-Duplicates an object...  accepts the same parameters as the Backticks->new().
-Any config parameters set in the original object can be overridden with newly
-passed ones in the object-based ->new call.
-
 =cut
 
 sub new ($@) {
-    my $self;
-    if (_call_type \@_ == CLASS) {
-        $self = bless {}, shift @_;
-    }
-    elsif (_call_type \@_ == INSTANCE) {
-        my $orig = shift @_;
-        $self = bless { %{$orig} }, ref($orig);
-        $self->reset;
-    }
-    else {
-        croak "new() must be called as an instance or class method!";
-    }
-    return $self unless @_;
-    # Set the command
-    $self->_set( 'command', shift @_ );
-    # Set all of the fields passed in
-    my %params = _parse_config_list(@_);
-    $self->_set( $_, $params{$_} ) foreach keys %params;
+    _call_type(\@_) == CLASS
+        or croak "Must be called as a class method!";
+    my $self = bless {}, shift @_;
+    $self->_init_obj(@_); 
     return $self;
 }
-
-*dup = *new;
 
 =head2 Backticks->run( 'command' [ , @params ] )
 
@@ -344,51 +364,32 @@ This is a source filter alias for:
     Backticks->run( 'command' ) 
 
 It will create a new Backticks object, run the command, and return the object
-complete with results.  Since Backticks objects stringify to the output of the
+complete with results.  Since Backticks objects stringify to the STDOUT from the
 command that was run, the default behavior is very similar to Perl's normal
 backticks.
 
-=head2 $obj->run() or $obj->rerun()
+=head2 $obj->run( [ 'command' [ , @params ] ] )
 
-Re-executes the command represented by $obj, and returns a new object.  If
-passed parameters, they will be handled in the same way as the ->dup() method
-above.
+Executes $obj's command.  If it is passed parameters, they are applied to the
+object as if passed into ->new() before the command is run.
 
 =cut
 
 sub run (@) {
-    my $self;
-    my $call_type = _call_type \@_;
-    if ($call_type == INSTANCE) {
-        my $orig = shift @_;
-        $self = $orig->dup(@_);
-    }
-    elsif ($call_type == CLASS) {
-        my $class = shift @_;
-        $self = $class->new(@_);
-    }
-    else {
-        $self = __PACKAGE__->new(@_);
-    }
 
-    $self->command || croak "Command was not set!";
-    $self->_debug( "Executing command `" . $self->command . "`:" );
+    my ($self, $call_type) = _self \@_;
+    $self->_init_obj(@_);
 
-#    if ( $self->command =~ m/[|><&]/ ) {
-#        $self->_warn(
-#            "Possible use of redirection in command `".$self->command."`: "
-#            . "(Backticks module doesn't support redirection)"
-#        );
-#    }
+    $self->_debug_warn( "Executing command `" . $self->command . "`:" );
 
     # Run in an eval to catch any perl errors
     eval {
 
         local $/ = "\n";
-       
+        
         # Open the command via open3, specifying IN/OUT/ERR streams
         my $pid = open3( \*P_STDIN, \*P_STDOUT, \*P_STDERR, $self->command )
-            || die $!;
+          || die $!;
         
         close P_STDIN; # Close the command's STDIN
         while (1) {
@@ -443,18 +444,24 @@ sub run (@) {
     }
 
     # Print debugging information
-    $self->_debug( $self->as_table );
+    $self->_debug_warn( $self->as_table );
 
     # If we are expected to die unless we have a success, then do so...
     if ( $self->autodie && not $self->success ) { croak $self->error_verbose }
 
     # Make it so we can get at the last command run through class methods
-    localize '$'.ref($self).'::last_run', $self, UP;
+    $Backticks::last_run = $self;
 
     return $self;
 }
 
-*rerun = *run;
+=head2 $obj->rerun()
+
+Re-execute $obj's command, and returns the object.
+
+=cut
+
+sub rerun (;$) { _self(\@_)->run() }
 
 =head2 $obj->reset()
 
@@ -478,7 +485,7 @@ sub as_table (;$$) {
     my $verbose = defined($_[0]) ? $_[0] : 0;
     my $out = '';
     # A private sub for this method...
-    my $add = sub {
+    sub $add = sub {
         my $name = shift; # Name of the field being displayed
         my $val  = shift; # Value of the field being displayed
         my $res  = shift; # Value resolved to (if applicable)
@@ -583,7 +590,7 @@ sub success (;$) {
     return ( $self->error eq '' ) ? 1 : 0;
 }
 
-=head2 $obj->autodie(), $obj->chomped(), $obj->compat, $obj->debug(), $obj->errmerge
+=head2 $obj->autodie(), $obj->chomped(), $obj->compat, $obj->debug(), $obj->merge, $obj->warnings
 
 Returns a 1 or 0, for the corresponding config for this object.  If these
 configurations have not been explicitly set for the object, it will return
@@ -591,26 +598,12 @@ the settings as they are currently set using Backticks::config.
 
 =cut
 
-sub autodie   (;$) { _get_config( shift(@_), 'autodie'  ) }
-sub chomped   (;$) { _get_config( shift(@_), 'chomped'  ) }
-sub compat    (;$) { _get_config( shift(@_), 'compat'   ) }
-sub debug     (;$) { _get_config( shift(@_), 'debug'    ) }
-sub errmerge  (;$) { _get_config( shift(@_), 'errmerge' ) }
-
-=head2 Backticks::last_run
-
-Returns an object representing the most recently run backticks object in the
-current code block.
-
-=cut
-
-sub last_run (;$) {
-    my $call_type = _call_type \@_;
-    croak "last_run is only callable as a function or class method"
-        if $call_type eq INSTANCE;
-    no strict 'refs';
-    return ${ _resolve_pkg(\@_).'::last_run' };
-}
+sub autodie   (;$) { _self(\@_)->_get( 'autodie'   ) }
+sub chomped   (;$) { _self(\@_)->_get( 'chomped'   ) }
+sub compat    (;$) { _self(\@_)->_get( 'compat'    ) }
+sub debug     (;$) { _self(\@_)->_get( 'debug'     ) }
+sub merge     (;$) { _self(\@_)->_get( 'merge'     ) }
+sub warnings  (;$) { _self(\@_)->_get( 'warnings'  ) }
 
 # Append to this instance or the last run instance's error field
 sub _add_error ($@) {
@@ -621,15 +614,15 @@ sub _add_error ($@) {
 }
 
 # Print debugging output to STDERR if debugging is enabled
-sub _debug ($@) {
+sub _debug_warn ($@) {
     _self(\@_)->debug || return;
-    warn "$_\n" foreach map { split /\n/, $_ } @_;
+    warn "$_\n" foreach split /\n/, @_;
 }
 
 # Print a warning if warnings are enabled
 sub _warn ($@) {
-    warnings::enabled() || return;
-    warnings::warn("$_\n") foreach map { split /\n/, $_ } @_;
+    _self(\@_)->warnings || return;
+    warn "$_\n" foreach split /\n/, @_;
 }
 
 =head1 ACCESSING THE LAST COMMAND
@@ -650,13 +643,11 @@ Example:
 
 If you want to access the last run object more explicitly, you can find it at:
     
-    Backticks::last_run
-
-Note that the last run results are scoped to the current code block.
+    $Backticks::last_run
 
 =head2 IMPORTING FUNCTIONS
 
-The Backticks module exports no functions into your local namespace by default.  
+The Backtick module exports no functions into your local namespace by default.  
 However, nearly all of the object methods are importable as functions,
 which will operate on the last run command in the current block as above.
 You can use :all to import all of Backtick's object methods like functions.

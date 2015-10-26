@@ -8,7 +8,6 @@ my $builder = Module::Build->new(
     license             => 'perl',
     dist_author         => q{Anthony Kilna <anthony@kilna.com>},
     dist_version_from   => 'lib/Backticks.pm',
-    dist_abstract       => 'Treat `backticks` like objects!',
     build_requires      => {
         'Test::More'    => 0,
         'Capture::Tiny' => 0,

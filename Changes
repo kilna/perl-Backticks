@@ -46,7 +46,7 @@ Revision history for Backticks
           working properly
         * Fixed Win32 chomped regression issue
 
-2.0.0   2015/05/22
+1.9.0   2015/10/26
 
         * Changed interface for configuration to new ->config() method
         * Expanded interface to allow for most methods to be called as 

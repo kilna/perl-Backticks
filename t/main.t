@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Scalar::Util qw(blessed);
-use Test::More 'tests' => 30;
+use Test::More 'tests' => 26;
 use Test::Output;
 use Capture::Tiny ':all';
 
@@ -22,39 +22,34 @@ isa_ok( $b, 'Backticks' );
 like( $b->stdout, qr/foo\r?\n/, 'output captured' );
 like( $b . '',    qr/foo\r?\n/, 'stringification works' );
 
-my $cmd = 'perl -e "'
-    . 'sub z(){select(undef,undef,undef,0.1)}' # Used as a sleep .1 sec here
-    . 'select(STDERR);'
-    . '$|=1;'
-    . 'select(STDOUT);'
-    . '$|=1;'
-    . 'print qq{o1\n};'
-    . 'z;'
-    . 'warn qq{e1\n};'
-    . 'z;'
-    . 'print qq{o2\n};'
-    . 'z;'
-    . 'warn qq{e2\n};'
-    . 'z;'
-    . 'exit 3;'
-    . '"';
-
-$b = Backticks->new($cmd);
+$b = Backticks->new(
+    'perl -e "'
+          . 'sub z(){select(undef,undef,undef,0.1)}' # Used as a sleep .1 sec here
+          . 'select(STDERR);'
+          . '$|=1;'
+          . 'select(STDOUT);'
+          . '$|=1;'
+          . 'print qq{o1\n};'
+          . 'z;'
+          . 'warn qq{e1\n};'
+          . 'z;'
+          . 'print qq{o2\n};'
+          . 'z;'
+          . 'warn qq{e2\n};'
+          . 'z;'
+          . 'exit 3;'
+          . '"',
+);
 isa_ok( $b, 'Backticks' );
 is( $b->stdout,   '',                            'command was not run yet' );
 Backticks::config '+chomped';
-is( Backticks->chomped,  1,                      'config option via class method' ); 
-is( $b->chomped,  1,                             'config option via instance method' );
-is( Backticks::chomped,  1,                      'config option via package function' );
-is( $Backticks::chomped,  1,                     'config option via package var' );
+is( $b->chomped,  1,                             'chomped was set for obj via config' ); 
+is( $Backticks::last_run,  1,                    'chomped was set for last_run via config' ); 
 eval {
-    Backticks::config '-chomped';
-    is(Backticks->chomped,  0,                   'config option negation in eval' );
-    is($b->chomped,   0,                         'config option scoping 1' );
+    Backticks::config qw(-chomped);
+    is($b->chomped,  0,                          'config -param in eval works' );
 };
-is($b->chomped,   1,                             'config option scoping 2' );
-
-Backticks::config '+debug';
+is($b->chomped,   1,                             'scoping works' );
 $b->run();
 like( $b->stdout, qr/^o1\r?\no2$/,               'stdout captured, chomped' );
 like( $b->stderr, qr/^e1\r?\ne2$/,               'stderr captured, chomped' );
@@ -69,10 +64,9 @@ eval {
 like(
     $@,
     qr/^\QError executing `perl -e "die"`:\E/,
-    'Backticks::config \'+autodie\' worked'
+    'Backticks::config '+autodie' worked'
 );
 
-Backticks::config '-autodie';
 `command_that_doesnt_exist`;
 is( Backticks::success(), 0, 'failure when command does not exist' );
 
@@ -111,7 +105,7 @@ is($str, $fc, 'single quotes work as expected' );
 
 my $obj;
 my ($stdout, $stderr, $exit) = capture {
-    Backticks::config '+compat';
+    Backticks::config 'compat';
     $obj = `perl -e 'print STDERR "Ignore this line\n"'`
 };
 is( $stderr, "Ignore this line\n", 'compat mode output works' );
