@@ -19,7 +19,7 @@ Backticks - Use `backticks` like objects!
 
 =cut
 
-our $VERSION = '1.0.2';
+our $VERSION = '1.0.3';
 
 =head1 SYNOPSIS
 
@@ -523,8 +523,9 @@ sub _debug_print {
 
 =head1 ACCESSING THE LAST RUN
 
-Any of the instance $obj->method's above can also be called as Backtics->method
-and will apply to the last command run through the Backticks module.  So:
+Any of the instance $obj->method's above can also be called as
+Backticks->method and will apply to the last command run through the Backticks
+module.  So:
 
     `run a command`;
     print Backticks->stderr;  # Will show the STDERR for `run a command`!

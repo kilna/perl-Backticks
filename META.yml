@@ -15,7 +15,7 @@ name: Backticks
 provides:
   Backticks:
     file: lib/Backticks.pm
-    version: v1.0.2
+    version: v1.0.3
 requires:
   Carp: 0
   Class::ISA: 0
@@ -24,4 +24,4 @@ requires:
   perl: 5.006
 resources:
   license: http://dev.perl.org/licenses/
-version: v1.0.2
+version: v1.0.3
