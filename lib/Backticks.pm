@@ -9,6 +9,7 @@ use File::Temp qw(tempfile);
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use Class::ISA;
+use IPC::Open3;
 use overload '""' => \&stdout;    # Object stringifies to command's stdout
 
 $Carp::Internal{ (__PACKAGE__) }++;
@@ -19,7 +20,7 @@ Backticks - Use `backticks` like objects!
 
 =cut
 
-our $VERSION = '1.0.4';
+our $VERSION = '1.0.5';
 
 =head1 SYNOPSIS
 
@@ -32,16 +33,17 @@ query in interesting ways.
 
     print $results->stdout;  # Get the command's STDOUT
     print $results->stderr;  # Get the command's STDERR
-    print $results->success; # Will be true when the command exited clean
+    print $results->merged;  # Get STDOUT and STDERR together
+    print $results->success; # Will be true when command exited clean
     print $results;          # Get the command's STDOUT... the object
-                             #   stringifies to the command's output so you 
-                             #   can use it most places you use normal
-                             #   backticks
+                             #   stringifies to the command's output
+                             #   so you can use it most places you
+                             #   use normal backticks
 
 You can have failed commands automatically die your perl script
                             
     $Backticks::autodie = 1;
-    `perl -e 'print STDERR "OUCH!\n"; exit 1'`; 
+    `perl -e 'print STDERR "OUCH!\n"; exit 1'`;
 
 Which dies with the following message:
 
@@ -53,14 +55,14 @@ Which dies with the following message:
 You can automatically chomp output:
 
     $Backticks::chomped = 1;
-    my $chomped = `perl -e 'print "Hello!\n"'`;
+    my $chomped = `perl -e "print qq{Hello\n}"`;
 
 You can even access parameters instantly in object mode by calling methods
 immediately after the backticks!
     
-    say `echo foo`->stdout;                              # Shows 'foo'
-    say `perl -e 'print STDERR "Hello world!"'`->stderr; # Shows 'Hello world'
-    say `perl -e 'exit 1'`->exitcode;                    # Shows '1'
+    say `echo foo`->stdout;                        # Shows 'foo'
+    say `perl -e "print STDERR 'Hello!'"`->stderr; # Shows 'Hello!'
+    say `perl -e "exit 1"`->exitcode;              # Shows '1'
     
 You can also use the classical perl object-oriented interface instead of
 using the backticks to create objects, the following command is the same as
@@ -111,6 +113,7 @@ my %field_info = (
     'error'      => { 'default' => '' },
     'stdout'     => { 'default' => '' },
     'stderr'     => { 'default' => '' },
+    'merged'     => { 'default' => '' },
     'returncode' => { 'default' => 0 },
 
     # Instance-overrideable class variables
@@ -251,12 +254,21 @@ sub new {
     return $self;
 }
 
-=head2 `command`
-
-=head2 Backticks->run( 'command', %params )
+=head2 Backticks->run( 'command', [ %params ] )
 
 Behaves exactly like Backticks->new(...), but after the object is created it
 immediately runs the command before returning the object.
+
+=head2 `command`
+
+This is a source filter alias for:
+
+    Backticks->run( 'command' )
+
+It will create a new Backticks object, run the command, and return the object
+complete with results.  Since Backticks objects stringify to the STDOUT of the
+command which was run, the default behavior is very similar to Perl's normal
+backticks.
 
 =head1 OBJECT METHODS
 
@@ -280,48 +292,32 @@ sub run {
 
     $self->_debug_print( "Executing command `" . $self->command . "`:" );
 
-    # Redirecting stdout/stderr to files was the most consistent
-    # cross-platform way of capturing output.  It's inefficient and
-    # kinda kludgy but it works!
-
-    ( undef, my $outfile ) = tempfile();    # Redirect file for STDOUT
-    ( undef, my $errfile ) = tempfile();    # Redirect file for STDERR
-
     # Run in an eval to catch any perl errors
     eval {
 
-        my $null;
-        my $cmd = $self->command . " 1>$outfile 2>$errfile";
-        $null = qx{$cmd};
+        local $/ = "\n";
+        
+        my $pid = open3( \*P_STDIN, \*P_STDOUT, \*P_STDERR, $self->command )
+          || die $!;
+        
+        close P_STDIN;
+        while (1) {
+            if ( not eof P_STDOUT ) {
+                $self->{'stdout'} .= my $out = <P_STDOUT>;
+                $self->{'merged'} .= $out;
+            }
+            if ( not eof P_STDERR ) {
+                $self->{'stderr'} .= my $err = <P_STDERR>;
+                $self->{'merged'} .= $err;
+            }
+            last if eof(P_STDOUT) && eof(P_STDERR);
+        }
+        
+        waitpid( $pid, 0 ) || die $!;
 
         # Prep the results hash
         if ($?) { $self->{'returncode'} = $? }
 
-        # Complain if we got anything to stdout for the command (it should
-        # have been captured to a temp file per the open command above)
-        if ( $null ne '' ) {
-            die "Unexpected output after redirection:\n" . $null;
-        }
-
-        # Read in the redirected STDOUT file contents
-        if ( open my $OUT_FILE, '<', $outfile ) {
-            my $stdout = join '', <$OUT_FILE>;
-            if ( $stdout ne '' ) { $self->{'stdout'} = $stdout }
-            close $OUT_FILE;
-        }
-        else {
-            die "Unable to open STDOUT file $outfile: $!\n";
-        }
-
-        # Read in the redirected STDERR file contents
-        if ( open my $ERR_FILE, '<', $errfile ) {
-            my $stderr = join '', <$ERR_FILE>;
-            if ( $stderr ne '' ) { $self->{'stderr'} = $stderr }
-            close $ERR_FILE;
-        }
-        else {
-            die "Unable to open STDERR file $errfile: $!\n";
-        }
     };
 
     if ($@) {
@@ -350,14 +346,11 @@ sub run {
             "Failed with non-zero exit code " . $self->exitcode );
     }
 
-    # Remote the temp files used for the command's STDOUT and STDERR
-    if ( -e $outfile ) { unlink $outfile; }
-    if ( -e $errfile ) { unlink $errfile; }
-
     # Perform a chomp if requested
     if ( $self->chomped ) {
-        defined( $self->{'stdout'} ) && chomp $self->{'stdout'};
-        defined( $self->{'stderr'} ) && chomp $self->{'stderr'};
+        defined( $self->{'stdout'} ) && ($self->{'stdout'} =~ s/\r?\n$//);
+        defined( $self->{'stderr'} ) && ($self->{'stderr'} =~ s/\r?\n$//);
+        defined( $self->{'merged'} ) && ($self->{'merged'} =~ s/\r?\n$//);
     }
 
     # Print debugging information
@@ -415,6 +408,9 @@ sub as_table {
     if ( $self->stderr ne '' ) {
         $out .= "STDERR      : " . $p->( $self->stderr ) . "\n";
     }
+    if ( $self->merged ne '' ) {
+        $out .= "Merged      : " . $p->( $self->merged ) . "\n";
+    }
     if ( $self->returncode ) {
         $out .= "Return Code : " . $p->( $self->returncode ) . "\n";
         $out .= "Exit Code   : " . $p->( $self->exitcode ) . "\n";
@@ -429,21 +425,29 @@ sub as_table {
 Returns a string containing the command that this object is/was configured to
 run.
 
-=head2 $obj->stdout(), $obj->stderr()
+=head2 $obj->stdout(), $obj->stderr(), $obj->merged()
 
 Returns a string containing the contents of STDOUT or STDERR of the command
 which was run.  If chomped is true, then this value will lack the trailing
-newline if one happened in the captured output.
+newline if one happened in the captured output.  Merged is the combined output
+of STDOUT and STDERR.
 
 =head2 $obj->returncode(), $obj->exitcode(), $obj->coredump(), $obj->signal()
 
 Returns an integer, indicating a $?-based value at the time the command was
 run:
 
-	* returncode = $?
-    * exitcode   = $? >> 8
-    * coredump   = $? & 128
-    * signal     = $? & 127
+=over 4
+
+=item returncode = $?
+
+=item exitcode   = $? >> 8
+
+=item coredump   = $? & 128
+
+=item signal     = $? & 127
+
+=back
 
 =head2 $obj->error(), $obj->error_verbose()
 
@@ -458,6 +462,7 @@ sub error      { _field( shift(@_), 'error' ) }
 sub returncode { _field( shift(@_), 'returncode' ) }
 sub stdout     { _field( shift(@_), 'stdout' ) }
 sub stderr     { _field( shift(@_), 'stderr' ) }
+sub merged     { _field( shift(@_), 'merged' ) }
 sub coredump { _self(@_)->returncode & 128 }
 sub exitcode { _self(@_)->returncode >> 8 }
 sub signal   { _self(@_)->returncode & 127 }
@@ -528,30 +533,51 @@ If you want to access the last run object more explicitly, you can find it at:
     
     $Backticks::last_run
     
-=head1 CAVEATS
+=head1 NOTES
 
-We capture output through redirection to temp files, so you can't use
-redirection in your backticks or you will get unexpected results.  This also
-means there's a speed penatly as compared to plain perl backticks, but it's the
-only way to capture both STDOUT and STDERR that worked consistently
-cross-platform and cross-perl-versions.
-    
+=over 4
+
+=item No redirection
+
+Since we're not using the shell to open subprocesses (behind the scenes we're
+using L<open3>) you can't redirect input or output.  But that shouldn't be a
+problem, since getting the redirected output is likely why you're using this
+module in the first place. ;)
+ 
+=item STDERR is captured by default
+
+Since we're capturing STDERR from commands which are run, the default behavior
+is different from Perl's normal backticks, which will print the subprocess's
+STDERR output to the perl process's STDERR.  In other words, command error
+streams normally trickle up into Perl's error stream, but won't under this
+module.  You can always just print it yourself:
+
+    print STDERR `command`->stderr;
+
+=item Source filtering
+
 The overriding of `backticks` is provided by Filter::Simple.  Source filtering
 can be weird sometimes...   if you want to use this module in a purely
 traditional Perl OO style, simply turn off the source filtering as soon as you
 load the module:
 
     use Backticks;
-    no Backticks; # Module is still loaded, but `backticks` are perl's built-in
-                  # ones...  use Backticks->run() or Backticks->new() to create
-                  # objects now.
-    
+    no Backticks;
+
+This way the class is loaded, but `backticks` are Perl-native.  You can still
+use Backticks->run() or Backticks->new() to create objects even after the
+"no Backticks" statement.
+
+=item Using Perl's backticks with Backticks
+
 If you want to use Perl's normal backticks functionality in conjunction with
 this module's `backticks`, simply use qx{...} instead:
 
     use Backticks;
-    `command`;   # Goes through the Backticks modules and returns an object
-    qx{command}; # Bypasses the Backticks module, returns a string
+    `command`;   # Uses the Backticks module, returns an object
+    qx{command}; # Bypasses Backticks module, returns a string
+
+=item Module variable scope
 
 The module's variables are shared everywhere it's used within a perl runtime.
 If you want to make sure that the setting of a Backticks variable is limited to
@@ -562,6 +588,8 @@ the scope you're in, you should use 'local':
 This will return $Backticks::chomped to whatever its prior state was once it
 leaves the block.
     
+=back
+
 =head1 AUTHOR
 
 Anthony Kilna, C<< <anthony at kilna.com> >> - L<http://anthony.kilna.com>

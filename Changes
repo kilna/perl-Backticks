@@ -20,3 +20,9 @@ Revision history for Backticks
 
         * Changed from using open() to run commands in an attempt to fix
           Windows platform problems
+
+1.0.5   2012/07/20
+
+        * Changed to open3() to run commands, fixed error in chomped output
+          on Windows platforms, fixed command escaping in tests, added
+          ->merged to get the merged output of both STDOUT and STDERR

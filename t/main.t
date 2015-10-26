@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Scalar::Util qw(blessed);
-use Test::More 'tests' => 14;
+use Test::More 'tests' => 15;
 
 BEGIN {
 
@@ -12,34 +12,46 @@ BEGIN {
     use_ok('Backticks') || print "Bail out!\n";
 }
 
+my $n = '\r?\n';
+
 diag("Testing Backticks $Backticks::VERSION, Perl $], $^X");
 
-my $cmd = `perl -e 'print "foo\n"'`;
-isa_ok( $cmd, 'Backticks' );
-is( $cmd->stdout, "foo\n", 'output captured' );
-is( $cmd . '',    "foo\n", 'stringification works' );
+my $b = `perl -e "print qq{foo\n}"`;
+isa_ok( $b, 'Backticks' );
+like( $b->stdout, qr/foo\r?\n/, 'output captured' );
+like( $b . '',    qr/foo\r?\n/, 'stringification works' );
 
-$cmd
-    = Backticks->new(
-    q^perl -e 'print STDERR "foo!\n"; print "bar!\n"; exit 3'^,
-    chomped => 1, );
-isa_ok( $cmd, 'Backticks' );
-isnt( $cmd->stderr, 'foo!', 'command was not run yet' );
-$cmd->run();
-is( $cmd->stderr,   'foo!', 'stderr captured, chomped' );
-is( $cmd->stdout,   'bar!', 'stdout captured, chomped' );
-is( $cmd->exitcode, 3,      'exit code captured' );
-is( $cmd->success,  0,      'Success set properly' );
+$b = Backticks->new(
+    'perl -e "'
+          . 'use Time::HiRes qw(sleep); '
+          . 'select (STDERR);        \$| = 1;'
+          . 'select (STDOUT);        \$| = 1;'
+          . 'print qq{o1\n};         sleep 0.1; '
+          . 'print STDERR qq{e1\n};  sleep 0.1; '
+          . 'print qq{o2\n};         sleep 0.1; '
+          . 'print STDERR qq{e2\n};  sleep 0.1; '
+          . 'exit 3;'
+          . '"',
+    chomped => 1,
+);
+isa_ok( $b, 'Backticks' );
+is( $b->stdout,   '',                            'command was not run yet'  );
+$b->run();
+like( $b->stdout, qr/^o1\r?\no2$/,               'stdout captured, chomped' );
+like( $b->stderr, qr/^e1\r?\ne2$/,               'stderr captured, chomped' );
+like( $b->merged, qr/^o1\r?\ne1\r?\no2\r?\ne2$/, 'merged captured, chomped' );
+is( $b->exitcode, 3,                             'exit code captured'       );
+is( $b->success,  0,                             'success set properly'     );
 
-eval { local $Backticks::autodie = 1; `perl -e 'die'`; };
+eval { local $Backticks::autodie = 1; `perl -e "die"`; };
 isnt( $@, '', '$Backticks::autodie works' );
 
-eval { `perl -e 'die'`; };
+eval { `perl -e "die"`; };
 is( $@, '', '$Backticks::autodie local worked' );
 
 `command_that_doesnt_exist`;
 is( Backticks->success, 0, 'failure when command does not exist' );
 
 no Backticks;
-$cmd = `perl -e 'print "foo\n"'`;
-isnt( blessed($cmd), 'Backticks', '"no Backticks" works' );
+$b = `perl -e "print qq{foo\n}"`;
+isnt( blessed($b), 'Backticks', '"no Backticks" works' );
