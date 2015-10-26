@@ -20,7 +20,7 @@ Backticks - Use `backticks` like objects!
 
 =cut
 
-our $VERSION = '1.0.5';
+our $VERSION = '1.0.6';
 
 =head1 SYNOPSIS
 

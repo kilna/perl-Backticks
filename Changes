@@ -26,3 +26,7 @@ Revision history for Backticks
         * Changed to open3() to run commands, fixed error in chomped output
           on Windows platforms, fixed command escaping in tests, added
           ->merged to get the merged output of both STDOUT and STDERR
+
+1.0.6   2012/07/21
+
+        * Fixed problem with escaping in tests, causing Win32 builds to fail
