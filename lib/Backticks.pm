@@ -21,7 +21,7 @@ Backticks - Use `backticks` like objects!
 
 =cut
 
-our $VERSION = '1.0.8';
+our $VERSION = '1.0.9';
 
 =head1 SYNOPSIS
 
@@ -340,10 +340,12 @@ sub run {
 
     # Perform a chomp if requested
     if ( $self->chomped ) {
-	# Defined checks are here so we don't auto-vivify the fields
-        defined( $self->{'stdout'} ) && chomp $self->{'stdout'};
-        defined( $self->{'stderr'} ) && chomp $self->{'stderr'};
-        defined( $self->{'merged'} ) && chomp $self->{'merged'};
+	# Defined checks are here so we don't auto-vivify the fields...
+	# We don't actually use chomp here because on Win32, chomp doesn't
+	# nix the carriage return.
+        defined( $self->{'stdout'} ) && $self->{'stdout'} =~ s/\r?\n$//;
+        defined( $self->{'stderr'} ) && $self->{'stderr'} =~ s/\r?\n$//;
+        defined( $self->{'merged'} ) && $self->{'merged'} =~ s/\r?\n$//;
     }
 
     # Print debugging information

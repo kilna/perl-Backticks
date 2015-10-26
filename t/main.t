@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Scalar::Util qw(blessed);
-use Test::More 'tests' => 18;
+use Test::More 'tests' => 21;
 
 BEGIN {
     # $Backticks::filter_debug = 1;
@@ -22,19 +22,18 @@ like( $b . '',    qr/foo\r?\n/, 'stringification works' );
 
 $b = Backticks->new(
     'perl -e "'
-          . 'use Time::HiRes qw(sleep); '
           . 'select (STDERR); '
           . '$| = 1; '
           . 'select (STDOUT); '
           . '$| = 1; '
           . 'print qq{o1\n}; '
-          . 'sleep 0.1; '
+          . 'sleep 1; '
           . 'print STDERR qq{e1\n}; '
-          . 'sleep 0.1; '
+          . 'sleep 1; '
           . 'print qq{o2\n}; '
-          . 'sleep 0.1; '
+          . 'sleep 1; '
           . 'print STDERR qq{e2\n}; '
-          . 'sleep 0.1; '
+          . 'sleep 1; '
           . 'exit 3;'
           . '"',
     chomped => 1,
@@ -57,18 +56,38 @@ is( $@, '', '$Backticks::autodie local worked' );
 `command_that_doesnt_exist`;
 is( Backticks->success, 0, 'failure when command does not exist' );
 
+# Set some stuff up for matching later.
+my $fc = "\x{60}fake command\x{60}";
+my $ml = "fake_perl_code();\n$fc;\n";
+
 my $str = <<EOF;
 fake_perl_code();
 `fake command`;
 EOF
-is( $str, "fake_perl_code();\n\x{60}fake command\x{60};\n",
-    'heredoc works normally' );
+is( $str, $ml, 'un-quoted heredoc work as expected' );
 
-$str = "`command`";
-is($str, "\x{60}command\x{60}", 'double quotes work normally' );
+$str = <<'EOF';
+fake_perl_code();
+`fake command`;
+EOF
+is( $str, $ml, 'single-quoted heredoc work as expected' );
 
-$str = '`command`';
-is($str, "\x{60}command\x{60}", 'single quotes work normally' );
+$str = <<"EOF";
+fake_perl_code();
+`fake command`;
+EOF
+is( $str, $ml, 'qouble-quoted heredoc work as expected' );
+
+$str = <<`EOF`;
+perl -e "print qq{foo\n}"
+EOF
+is( $str, "foo\n", 'backticks-quoted heredoc works as expected' );
+
+$str = "`fake command`";
+is($str, $fc, 'double quotes work as expected' );
+
+$str = '`fake command`';
+is($str, $fc, 'single quotes work as expected' );
 
 no Backticks;
 $b = `perl -e "print qq{foo\n}"`;

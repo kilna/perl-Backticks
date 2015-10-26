@@ -9,12 +9,9 @@ WriteMakefile
   'EXE_FILES' => [],
   'VERSION_FROM' => 'lib/Backticks.pm',
   'PREREQ_PM' => {
+                   'Test::More' => 0,
                    'Scalar::Util' => 0,
                    'Filter::Simple' => 0,
-                   'Time::HiRes' => 0,
-                   'IPC::Open3' => 0,
-                   'Carp' => 0,
-                   'Test::More' => 0,
                    'Class::ISA' => 0
                  }
 )
