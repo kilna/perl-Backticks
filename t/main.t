@@ -7,7 +7,6 @@ use Scalar::Util qw(blessed);
 use Test::More 'tests' => 15;
 
 BEGIN {
-
     # $Backticks::filter_debug = 1;
     use_ok('Backticks') || print "Bail out!\n";
 }

@@ -12,6 +12,7 @@ use Class::ISA;
 use IPC::Open3;
 use overload '""' => \&stdout;    # Object stringifies to command's stdout
 
+# Always report errors from a context outside of this package
 $Carp::Internal{ (__PACKAGE__) }++;
 
 =head1 NAME
@@ -20,7 +21,7 @@ Backticks - Use `backticks` like objects!
 
 =cut
 
-our $VERSION = '1.0.6';
+our $VERSION = '1.0.7';
 
 =head1 SYNOPSIS
 
@@ -47,7 +48,7 @@ You can have failed commands automatically die your perl script
 
 Which dies with the following message:
 
-    Error executing `perl -e 'print STDERR "OUCH!\n"; exit 1'`:
+    Error executing `perl -e 'warn "OUCH!\n"; exit 1'`:
     Failed with non-zero exit code 1
     Error output:
     OUCH!
@@ -60,13 +61,13 @@ You can automatically chomp output:
 You can even access parameters instantly in object mode by calling methods
 immediately after the backticks!
     
-    say `echo foo`->stdout;                        # Shows 'foo'
-    say `perl -e "print STDERR 'Hello!'"`->stderr; # Shows 'Hello!'
-    say `perl -e "exit 1"`->exitcode;              # Shows '1'
+    say `echo foo`->stdout;                 # Shows 'foo'
+    say `perl -e "warn 'Hello!'"`->stderr;  # Shows 'Hello!'
+    say `perl -e "exit 1"`->exitcode;       # Shows '1'
     
-You can also use the classical perl object-oriented interface instead of
-using the backticks to create objects, the following command is the same as
-the first one above:
+You can also use a perl object-oriented interface instead of using the
+`backticks` to create objects, the following command is the same as the first
+one above:
 
     my $results = Backticks->run("ls -la /");
     
@@ -92,57 +93,55 @@ Backticks package settings, by passing them as hash-style params:
 If set to 1, then any command which does not have a true success() will cause
 the Perl process to die.  Defaults to 0.
 
+This setting was the original onus for this module.  By setting autodie you can
+change a script which as a bunch of unchecked system calls in backticks to
+having the results all checked using only two lines of code.
+
 =head2 $Backticks::chomped
 
 If set to 1, then STDOUT and STDERR will remove a trailing newline from the
 captured contents, if present.  Defaults to 0.
+
+It's very rare when you get output from a command and you don't want its
+output chomped, or at least it's rare when chomping will cause a problem.
 
 =head2 $Backticks::debug
 
 If set to 1, then additional debugging information will be output to STDERR.
 Defaults to 0.
 
+If you are running deployment scripts in which the output of every command
+needs to be logged, this can be a handy way of showing everything about each
+command which was run.
+
 =cut
 
-# Only class fields are settable (via class method calls)
-# ... those are the ones with the 'package' definitions.
-my %field_info = (
-
-    # Instance variables
-    'command'    => { 'default' => '' },
-    'error'      => { 'default' => '' },
-    'stdout'     => { 'default' => '' },
-    'stderr'     => { 'default' => '' },
-    'merged'     => { 'default' => '' },
-    'returncode' => { 'default' => 0 },
-
-    # Instance-overrideable class variables
-    'debug' => {
-        'default' => 0,
-        'package' => 1,
-        'check'   => sub {
-            return if ( defined $_[0] && ( $_[0] != 1 || $_[0] != 0 ) );
-            croak "Value for 'debug' of '$_[0]' is not a 1 or 0";
-        },
-    },
-    'autodie' => {
-        'default' => 0,
-        'package' => 1,
-        'check'   => sub {
-            return if ( defined $_[0] && ( $_[0] != 1 || $_[0] != 0 ) );
-            croak "Value for 'autodie' of '$_[0]' is not a 1 or 0";
-        },
-    },
-    'chomped' => {
-        'default' => 0,
-        'package' => 1,
-        'check'   => sub {
-            return if ( defined $_[0] && ( $_[0] != 1 || $_[0] != 0 ) );
-            croak "Value for 'chomped' of '$_[0]' is not a 1 or 0";
-        },
-    },
+# Default values for all object fields
+my %field_defaults = (
+    'command'    => '',
+    'error'      => '',
+    'stdout'     => '',
+    'stderr'     => '',
+    'merged'     => '',
+    'returncode' => 0,
+    'debug'      => 0,
+    'autodie'    => 0,
+    'chomped'    => 0,
 );
 
+# These object fields are settable
+my %field_is_settable = map { $_ => 1 } qw(command debug autodie chomped);
+
+# These settable object fields cause the object to be reset when they're set
+my %field_causes_reset = map { $_ => 1 } qw(command);
+
+# These object fields are removed when the ->reset method is called
+my %field_does_reset = map { $_ => 1 } qw(error stdout stderr returncode);
+
+# These object fields default to package variables of the same name
+my %field_has_package_var = map { $_ => 1 } qw(debug autodie chomped);
+
+# Implement the source filter in Filter::Simple
 FILTER_ONLY quotelike => sub {
     s{^`(.*?)`$}
          {
@@ -153,18 +152,23 @@ FILTER_ONLY quotelike => sub {
          }egsx;
     },
     all => sub {
-    $Backticks::filter_debug
-        && print STDERR join '', map {"Backticks: $_\n"} split /\n/, $_;
+	# The variable $Backticks::filter_debug indicates that we
+	# should print the input source lines as the appear after processing
+        $Backticks::filter_debug
+            && warn join '', map {"Backticks: $_\n"} split /\n/, $_;
     };
 
-# Determine if we're being called as a valid
-# class or instance method...  if neither then die
-sub _class_method (@) {
+# Determine if we're being called as a valid class or instance method
+# Return a 1 if we're a class method, a 0 if we're an instance method, 
+# or if neither then croak complaining that it's a problem
+sub _class_method {
     my $source = $_[0];
     if ( blessed $source ) {
         return 0 if $source->isa('Backticks');
     }
     elsif ( defined $source && not ref $source ) {
+	# Since we're checking through Class::ISA, this should work for
+	# subclasses of this module (if we ever have any)
         return 1
             if scalar( grep { $_ eq 'Backticks' }
                 Class::ISA::self_and_super_path($source) );
@@ -172,9 +176,9 @@ sub _class_method (@) {
     croak "Must be called as a class or instance method";
 }
 
-# Get this object or the last run's object depending on if this
-# was called as a class method or instance method
-sub _self (@) {
+# Get the instance object (if called as an instance method) or the last run's
+# object (if called as a class method)
+sub _self {
     if ( _class_method(@_) ) {
         defined($Backticks::last_run)
             || croak "No previous Backticks command was run";
@@ -183,52 +187,42 @@ sub _self (@) {
     return $_[0];
 }
 
-# Generic accessor
-sub _field ($$;$) {
-    my $self  = _self( shift @_ );
-    my $field = shift @_;
-    defined( $field_info{$field} ) || croak "Unrecognized field '$field'";
-    my %info = %{ $field_info{$field} };
-    $Backticks::default_debug
-        && print STDERR eval { use Data::Dumper; Dumper( \%info ) };
-    if ( scalar @_ ) {
+# Generic accessor to get the field for the current object (if called
+# as an instance method) or the last run's object (if called as a class
+# method)
+sub _get {
 
-        # Allow setting of class variables or class-overriding instance
-        # variables ( regular instance variables are only set at the time
-        # the command is run, by the ->new method )
-        unless ( defined $info{'package'} && $info{'package'} ) {
-            croak "Field '$field' cannot be set";
-        }
-        my $newval = shift;
-        if ( defined $info{'check'} ) { $info{'check'}->($newval); }
-        $self->{$field} = $newval;
+    # Resolve the object being operated upon (class or instance)
+    my $self  = _self( shift @_ );
+    my $field = shift @_; # The field being operated upon for this object
+    
+    exists( $field_defaults{$field} ) || croak "Unrecognized field '$field'";
+
+    # Firstly, try to get the value from the object
+    return $self->{$field} if defined( $self->{$field} );
+    
+    # If not found in the object, then get the value from the package var
+    if ( $field_has_package_var{$field} ) {
+	my $pkg_var = eval { no strict 'refs'; ${ 'Backticks::' . $field } };
+        return $pkg_var if defined( $pkg_var );
     }
-    no strict 'refs';
-    if ( defined $self->{$field} ) {
-        $Backticks::default_debug
-            && print STDERR "'$field' from self = '"
-            . $self->{$field} . "'\n";
-        return $self->{$field};
-    }
-    elsif (defined $info{'package'}
-        && $info{'package'}
-        && defined ${ 'Backticks::' . $field } )
-    {
-        $Backticks::default_debug
-            && print STDERR "'$field' from package = '"
-            . ${ 'Backticks::' . $field } . "'\n";
-        return ${ 'Backticks::' . $field };
-    }
-    elsif ( defined $info{'default'} ) {
-        $Backticks::default_debug
-            && print STDERR "'$field' from default = '"
-            . $info{'default'} . "'\n";
-        return $info{'default'};
-    }
-    else {
-        $Backticks::default_debug
-            && print STDERR "No default defined for field '$field'";
-        return '';
+
+    # Otherwise return the default value for the field
+    return $field_defaults{$field};
+}
+
+sub _set {
+    # Resolve the object being operated upon (class or instance)
+    my $self  = _self( shift @_ );
+    my $field = shift @_; # The field being operated upon for this object
+    
+    exists( $field_defaults{$field} ) || croak "Unrecognized field '$field'";
+
+    if ( scalar @_ ) {
+        croak "Field '$field' cannot be set."
+	    unless $field_is_settable{$field};
+        $self->{$field} = shift @_;
+        $self->reset if $field_causes_reset{$field};
     }
 }
 
@@ -242,15 +236,17 @@ boolean values for this instance's 'debug', 'autodie' and 'chomped' settings.
 =cut
 
 sub new {
-
+    
     _class_method(@_) || croak "Must be called as a class method!";
-    my $class   = shift;
-    my $command = shift;
-    my %params  = @_;
+    my $self = bless {}, shift @_;
+    
+    # Set the command
+    $self->_set( 'command', shift @_ );
 
-    my $self = bless { 'command' => $command }, $class;
-    $self->_field( $_, $params{$_} ) foreach keys %params;
-
+    # Set all of the fields passed into ->new
+    my %params = @_;
+    $self->_set( $_, $params{$_} ) foreach keys %params;
+    
     return $self;
 }
 
@@ -290,17 +286,18 @@ sub run {
 
     $self->reset;
 
-    $self->_debug_print( "Executing command `" . $self->command . "`:" );
+    $self->_debug_warn( "Executing command `" . $self->command . "`:" );
 
     # Run in an eval to catch any perl errors
     eval {
 
         local $/ = "\n";
         
+	# Open the command via open3, specifying IN/OUT/ERR streams
         my $pid = open3( \*P_STDIN, \*P_STDOUT, \*P_STDERR, $self->command )
           || die $!;
         
-        close P_STDIN;
+        close P_STDIN; # Close the command's STDIN
         while (1) {
             if ( not eof P_STDOUT ) {
                 $self->{'stdout'} .= my $out = <P_STDOUT>;
@@ -315,46 +312,42 @@ sub run {
         
         waitpid( $pid, 0 ) || die $!;
 
-        # Prep the results hash
         if ($?) { $self->{'returncode'} = $? }
 
     };
 
     if ($@) {
-
         # If $@ was set then perl had a problem running the command
         $self->_add_error($@);
     }
     elsif ( $self->returncode == -1 ) {
-
         # If we got a return code of -1 then we weren't able to run the
         # command (the most common cause of this is the command didn't exist
         # or we didn't have permissions to run it)
         $self->_add_error("Failed to execute: $!");
     }
     elsif ( $self->signal ) {
-
         # If we have a non-zero signal then the command went askew
         my $err = "Died with signal " . $self->signal;
         if ( $self->coredump ) { $err .= " with coredump"; }
         $self->_add_error($err);
     }
     elsif ( $self->exitcode ) {
-
         # If we have a non-zero exit code then the command went askew
         $self->_add_error(
-            "Failed with non-zero exit code " . $self->exitcode );
+	    "Failed with non-zero exit code " . $self->exitcode );
     }
 
     # Perform a chomp if requested
     if ( $self->chomped ) {
-        defined( $self->{'stdout'} ) && ($self->{'stdout'} =~ s/\r?\n$//);
-        defined( $self->{'stderr'} ) && ($self->{'stderr'} =~ s/\r?\n$//);
-        defined( $self->{'merged'} ) && ($self->{'merged'} =~ s/\r?\n$//);
+	# Defined checks are here so we don't auto-vivify the fields
+        defined( $self->{'stdout'} ) && chomp $self->{'stdout'};
+        defined( $self->{'stderr'} ) && chomp $self->{'stderr'};
+        defined( $self->{'merged'} ) && chomp $self->{'merged'};
     }
 
     # Print debugging information
-    $self->_debug_print( $self->as_table );
+    $self->_debug_warn( $self->as_table );
 
     # If we are expected to die unless we have a success, then do so...
     if ( $self->autodie && not $self->success ) { croak $self->error_verbose }
@@ -381,7 +374,7 @@ Resets the object back to a state as if the command had never been run
 
 sub reset {
     my $self = _self(@_);
-    delete $self->{$_} foreach qw(error stdout stderr returncode);
+    delete $self->{$_} foreach grep { $field_does_reset{$_} } keys %$self;
 }
 
 =head2 $obj->as_table()
@@ -392,32 +385,35 @@ Returns a summary text table about the command.
 
 sub as_table {
     my $self = _self(@_);
-    my $p    = sub {
-        my $val = shift;
-        if ( not defined $val ) { $val = 'undef'; }
-        return join( "\n" . ( ' ' x 14 ), split "\n", $val );
-    };
     my $out = '';
-    $out .= "Command     : " . $p->( $self->command ) . "\n";
-    if ( $self->error ) {
-        $out .= "Error       : " . $p->( $self->error ) . "\n";
-    }
-    if ( $self->stdout ne '' ) {
-        $out .= "STDOUT      : " . $p->( $self->stdout ) . "\n";
-    }
-    if ( $self->stderr ne '' ) {
-        $out .= "STDERR      : " . $p->( $self->stderr ) . "\n";
-    }
-    if ( $self->merged ne '' ) {
-        $out .= "Merged      : " . $p->( $self->merged ) . "\n";
-    }
+    _tbl( \$out, 'Command', $self->command);
+    $self->error  && _tbl( \$out, 'Error', $self->error );
+    $self->stdout && _tbl( \$out, 'STDOUT', $self->stdout );
+    $self->stderr && _tbl( \$out, 'STDERR', $self->stderr );
+    $self->merged && _tbl( \$out, 'Merged', $self->merged );
     if ( $self->returncode ) {
-        $out .= "Return Code : " . $p->( $self->returncode ) . "\n";
-        $out .= "Exit Code   : " . $p->( $self->exitcode ) . "\n";
-        $out .= "Signal      : " . $p->( $self->signal ) . "\n";
-        $out .= "Coredump    : " . $p->( $self->coredump ) . "\n";
+        _tbl( \$out, 'Return Code', $self->returncode );
+        _tbl( \$out, 'Exit Code', $self->exitcode );
+        _tbl( \$out, 'Signal', $self->signal );
+        _tbl( \$out, 'Coredump', $self->coredump );
     }
     return $out;
+}
+
+# Adds rows to the provided string ref for as_table above
+sub _tbl {
+    my $out  = shift; # String reference to add the row to
+    my $name = shift; # Name of the field being displayed
+    my $val  = shift; # Value of the field being displayed
+    
+    # Show undefined values as the string "undef"
+    if ( not defined $val ) { $val = 'undef'; }
+    
+    # Indent multi-line values
+    $val = join( "\n" . ( ' ' x 14 ), split "\n", $val );
+    
+    # Append the row
+    $$out .= sprintf "%-11s : %s\n", $name, $val;
 }
 
 =head2 $obj->command()
@@ -457,12 +453,12 @@ command which was run and STDERR's output.
 
 =cut
 
-sub command    { _field( shift(@_), 'command' ) }
-sub error      { _field( shift(@_), 'error' ) }
-sub returncode { _field( shift(@_), 'returncode' ) }
-sub stdout     { _field( shift(@_), 'stdout' ) }
-sub stderr     { _field( shift(@_), 'stderr' ) }
-sub merged     { _field( shift(@_), 'merged' ) }
+sub command    { _get( shift(@_), 'command'    ) }
+sub error      { _get( shift(@_), 'error'      ) }
+sub returncode { _get( shift(@_), 'returncode' ) }
+sub stdout     { _get( shift(@_), 'stdout'     ) }
+sub stderr     { _get( shift(@_), 'stderr'     ) }
+sub merged     { _get( shift(@_), 'merged'     ) }
 sub coredump { _self(@_)->returncode & 128 }
 sub exitcode { _self(@_)->returncode >> 8 }
 sub signal   { _self(@_)->returncode & 127 }
@@ -484,9 +480,7 @@ return code.
 
 sub success {
     my $self = _self(@_);
-    return 0 if ( $self->error ne '' );
-    return 0 if ( $self->returncode == 0 );
-    return 1;
+    return ( $self->error eq '' ) ? 1 : 0;
 }
 
 =head2 $obj->autodie(), $obj->chomped(), $obj->debug()
@@ -498,11 +492,11 @@ as default.
 
 =cut
 
-sub autodie    { _field( shift(@_), 'autodie' ) }
-sub chomped    { _field( shift(@_), 'chomped' ) }
-sub debug      { _field( shift(@_), 'debug' ) }
+sub autodie { _get( shift(@_), 'autodie' ) }
+sub chomped { _get( shift(@_), 'chomped' ) }
+sub debug   { _get( shift(@_), 'debug'   ) }
 
-# Appent to this instance or the last run instance's error field
+# Append to this instance or the last run instance's error field
 sub _add_error {
     my $self = _self( shift @_ );
     if ( $self->{'error'} ) { $self->{'error'} .= "\n"; }
@@ -511,9 +505,9 @@ sub _add_error {
 }
 
 # Print debugging output to STDERR if debugging is enabled
-sub _debug_print {
+sub _debug_warn {
     _self( shift @_ )->debug || return;
-    print STDERR "$_\n" foreach split /\n/, @_;
+    warn "$_\n" foreach split /\n/, @_;
 }
 
 =head1 ACCESSING THE LAST RUN
@@ -552,7 +546,7 @@ STDERR output to the perl process's STDERR.  In other words, command error
 streams normally trickle up into Perl's error stream, but won't under this
 module.  You can always just print it yourself:
 
-    print STDERR `command`->stderr;
+    warn `command`->stderr;
 
 =item Source filtering
 
