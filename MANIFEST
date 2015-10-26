@@ -1,6 +1,7 @@
 Build.PL
 Changes
 lib/Backticks.pm
+LICENSE
 Makefile.PL
 MANIFEST
 META.yml
