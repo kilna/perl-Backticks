@@ -23,9 +23,10 @@ Revision history for Backticks
 
 1.0.5   2012/07/20
 
-        * Changed to open3() to run commands, fixed error in chomped output
-          on Windows platforms, fixed command escaping in tests, added
-          ->merged to get the merged output of both STDOUT and STDERR
+        * Changed to open3() to run commands
+        * Fixed error in chomped output on Windows platforms
+        * Fixed command escaping in tests
+        * Added ->merged() to get the merged output of both STDOUT and STDERR
 
 1.0.6   2012/07/21
 
@@ -42,4 +43,12 @@ Revision history for Backticks
 1.0.9   2012/08/30
 
         * Added some more sanity tests to ensure that Filter::Simple is
-          working properly.  Fixed Win32 chomped regression issue.
+          working properly
+        * Fixed Win32 chomped regression issue
+
+2.0.0   2015/05/22
+
+        * Changed interface for configuration to new ->config() method
+        * Expanded interface to allow for most methods to be called as 
+          imported functions
+

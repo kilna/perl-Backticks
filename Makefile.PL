@@ -3,17 +3,17 @@ require 5.006;
 use ExtUtils::MakeMaker;
 WriteMakefile
 (
+  'PREREQ_PM' => {
+                   'Scope::Upper' => 0,
+                   'Test::More' => 0,
+                   'Scalar::Util' => 0,
+                   'Capture::Tiny' => 0,
+                   'Filter::Simple' => 0
+                 },
+  'EXE_FILES' => [],
+  'INSTALLDIRS' => 'site',
   'PL_FILES' => {},
   'NAME' => 'Backticks',
-  'INSTALLDIRS' => 'site',
-  'PREREQ_PM' => {
-                   'Capture::Tiny' => 0,
-                   'Test::More' => 0,
-                   'Filter::Simple' => 0,
-                   'Scalar::Util' => 0,
-                   'Scope::Upper' => 0
-                 },
-  'VERSION_FROM' => 'lib/Backticks.pm',
-  'EXE_FILES' => []
+  'VERSION_FROM' => 'lib/Backticks.pm'
 )
 ;
