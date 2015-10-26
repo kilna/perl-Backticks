@@ -6,7 +6,7 @@ use Module::Build;
 my $builder = Module::Build->new(
     module_name         => 'Backticks',
     license             => 'perl',
-    dist_author         => q{Anthony Kilna <kilna@kilna.com>},
+    dist_author         => q{Anthony Kilna <anthony@kilna.com>},
     dist_version_from   => 'lib/Backticks.pm',
     build_requires => {
         'Test::More'     => 0,

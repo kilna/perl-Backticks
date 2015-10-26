@@ -1,7 +1,7 @@
 ---
 abstract: 'Use `backticks` like objects'
 author:
-  - 'Anthony Kilna <kilna@kilna.com>'
+  - 'Anthony Kilna <anthony@kilna.com>'
 build_requires:
   Test::More: 0
 configure_requires:
@@ -15,7 +15,7 @@ name: Backticks
 provides:
   Backticks:
     file: lib/Backticks.pm
-    version: 1.0
+    version: v1.0.1
 requires:
   Carp: 0
   Class::ISA: 0
@@ -24,4 +24,4 @@ requires:
   perl: 5.006
 resources:
   license: http://dev.perl.org/licenses/
-version: 1.0
+version: v1.0.1

@@ -17,13 +17,9 @@ $Carp::Internal{ (__PACKAGE__) }++;
 
 Backticks - Use `backticks` like objects
 
-=head1 VERSION
-
-Version 1.0
-
 =cut
 
-our $VERSION = '1.0';
+our $VERSION = '1.0.1';
 
 =head1 SYNOPSIS
 
@@ -570,7 +566,7 @@ leaves the block.
 	
 =head1 AUTHOR
 
-Anthony Kilna, C<< <kilna at kilna.com> >>
+Anthony Kilna, C<< <anthony at kilna.com> >> - L<http://anthony.kilna.com>
 
 =head1 BUGS
 
@@ -609,14 +605,16 @@ L<http://search.cpan.org/dist/Backticks/>
 
 =back
 
-
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2012 Anthony Kilna.
+Copyright 2012 Kilna Companies.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published
 by the Free Software Foundation; or the Artistic License.
 
 See http://dev.perl.org/licenses/ for more information.
+
 =cut
+
+1; # End of Backticks
