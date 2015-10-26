@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Scalar::Util qw(blessed);
-use Test::More 'tests' => 15;
+use Test::More 'tests' => 18;
 
 BEGIN {
     # $Backticks::filter_debug = 1;
@@ -56,6 +56,19 @@ is( $@, '', '$Backticks::autodie local worked' );
 
 `command_that_doesnt_exist`;
 is( Backticks->success, 0, 'failure when command does not exist' );
+
+my $str = <<EOF;
+fake_perl_code();
+`fake command`;
+EOF
+is( $str, "fake_perl_code();\n\x{60}fake command\x{60};\n",
+    'heredoc works normally' );
+
+$str = "`command`";
+is($str, "\x{60}command\x{60}", 'double quotes work normally' );
+
+$str = '`command`';
+is($str, "\x{60}command\x{60}", 'single quotes work normally' );
 
 no Backticks;
 $b = `perl -e "print qq{foo\n}"`;

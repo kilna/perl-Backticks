@@ -34,3 +34,7 @@ Revision history for Backticks
 1.0.7   2012/08/29
 
         * Cleaned up accessor code, better documentation
+
+1.0.8   2012/08/30
+
+        * Added tests that prove Filter::Simple's quotelike parsing works
