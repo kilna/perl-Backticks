@@ -15,3 +15,8 @@ Revision history for Backticks
 1.0.3   2012/07/11
 
         * Typo in docs
+
+1.0.4   2012/07/18
+
+        * Changed from using open() to run commands in an attempt to fix
+          Windows platform problems

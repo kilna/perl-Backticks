@@ -19,7 +19,7 @@ Backticks - Use `backticks` like objects!
 
 =cut
 
-our $VERSION = '1.0.3';
+our $VERSION = '1.0.4';
 
 =head1 SYNOPSIS
 
@@ -290,27 +290,17 @@ sub run {
     # Run in an eval to catch any perl errors
     eval {
 
-        my @null;
-        if ( open my $NULL, $self->command . " 1>$outfile 2>$errfile |" ) {
-
-            # We create a filehandle for reading even tho we're
-            # redirecting output to a file, so we call it NULL
-            @null = <$NULL>;    # Process all incoming lines (there should be
-                                # none!)
-            close $NULL;
-        }
-        else {
-            die "Unable to open command: $!\n";
-        }
+        my $null;
+        my $cmd = $self->command . " 1>$outfile 2>$errfile";
+        $null = qx{$cmd};
 
         # Prep the results hash
         if ($?) { $self->{'returncode'} = $? }
 
         # Complain if we got anything to stdout for the command (it should
         # have been captured to a temp file per the open command above)
-        if ( scalar @null ) {
-            die "Unexpected output after redirection:\n"
-                . join( '', @null ) . "\n";
+        if ( $null ne '' ) {
+            die "Unexpected output after redirection:\n" . $null;
         }
 
         # Read in the redirected STDOUT file contents
