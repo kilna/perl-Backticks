@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Scalar::Util qw(blessed);
-use Test::More 'tests' => 26;
+use Test::More 'tests' => 27;
 use Test::Output;
 use Capture::Tiny ':all';
 
@@ -44,12 +44,12 @@ isa_ok( $b, 'Backticks' );
 is( $b->stdout,   '',                            'command was not run yet' );
 Backticks::config '+chomped';
 is( $b->chomped,  1,                             'chomped was set for obj via config' ); 
-is( $Backticks::last_run,  1,                    'chomped was set for last_run via config' ); 
+is( $Backticks::last_run->chomped, 1,            'chomped was set for last_run via config' ); 
 eval {
     Backticks::config qw(-chomped);
     is($b->chomped,  0,                          'config -param in eval works' );
 };
-is($b->chomped,   1,                             'scoping works' );
+is( $Backticks::last_run->chomped, 1,            'scoping works' );
 $b->run();
 like( $b->stdout, qr/^o1\r?\no2$/,               'stdout captured, chomped' );
 like( $b->stderr, qr/^e1\r?\ne2$/,               'stderr captured, chomped' );
@@ -64,7 +64,7 @@ eval {
 like(
     $@,
     qr/^\QError executing `perl -e "die"`:\E/,
-    'Backticks::config '+autodie' worked'
+    "Backticks::config '+autodie' worked"
 );
 
 `command_that_doesnt_exist`;

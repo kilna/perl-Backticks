@@ -12,8 +12,9 @@ use Filter::Simple;
 use File::Temp qw(tempfile);
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use Scope::Upper qw(localize context_info HERE UP);
+use Scope::Upper qw(localize_elem context_info HERE UP);
 use IPC::Open3;
+use Data::Dumper;
 use overload '""' => \&_stringify; # Stringification shows the command's STDOUT or merged output 
 use constant { FUNCTION => 1, CLASS => 2, INSTANCE => 3 }; # used with _call_type()
 
@@ -37,9 +38,9 @@ sub _init_obj ($@) {
     foreach my $var (keys %f_config) {
         my $var = ref($self).'::'.$var;
         my $val = eval { no strict 'refs'; ${$var} };
-        defined($val) || $self->_warn(
+        defined($val) && $self->_warn(
             "Config package variable \$$var no longer valid in "
-            . __PACKAGE__ . ' version ' . $VERSION . ".  Use "
+            . __PACKAGE__ . ' version ' . $VERSION . ". Use "
             . __PACKAGE__ . '::config(...) instead'
         );
     }
@@ -71,8 +72,8 @@ BEGIN {
     %f_config = map { $_ => 1 } qw(autodie chomped compat debug merge warnings);
     # This object stores the current scope's config, and its elements are
     # overridden via localized changes in a given scope
-    our $self = bless { %f_defaults }, __PACKAGE__;
-    $self->_init_obj;
+    our $last_run = bless { %f_defaults }, __PACKAGE__;
+    # $self->_init_obj;
 }
 
 # Implement the source filter in Filter::Simple
@@ -150,6 +151,10 @@ sub _get (@) {
         my $var = eval { no strict 'refs'; ${ref($self).'::last_run'}->{$field} };
         return $var if defined( $var );
     }
+
+    # As a last resort, attempt to get the value from deprecated package variables
+    my $val = eval { no strict 'refs'; ${ ref($self).'::'.$field } };
+    if ( defined $val ) { return $val }
 
     # Otherwise return the default value for the field
     return $f_defaults{$field};
@@ -485,7 +490,7 @@ sub as_table (;$$) {
     my $verbose = defined($_[0]) ? $_[0] : 0;
     my $out = '';
     # A private sub for this method...
-    sub $add = sub {
+    my $add = sub {
         my $name = shift; # Name of the field being displayed
         my $val  = shift; # Value of the field being displayed
         my $res  = shift; # Value resolved to (if applicable)
@@ -616,13 +621,13 @@ sub _add_error ($@) {
 # Print debugging output to STDERR if debugging is enabled
 sub _debug_warn ($@) {
     _self(\@_)->debug || return;
-    warn "$_\n" foreach split /\n/, @_;
+    warn "$_\n" foreach split /\n/, join "\n", @_;
 }
 
 # Print a warning if warnings are enabled
 sub _warn ($@) {
     _self(\@_)->warnings || return;
-    warn "$_\n" foreach split /\n/, @_;
+    warn "$_\n" foreach split /\n/, join "\n", @_;
 }
 
 =head1 ACCESSING THE LAST COMMAND
