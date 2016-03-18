@@ -21,7 +21,7 @@ use constant { FUNCTION => 1, CLASS => 2, INSTANCE => 3 }; # used with _call_typ
 # Always report errors from a context outside of this package
 $Carp::Internal{ (__PACKAGE__) }++;
 
-our $VERSION = '1.9.0_02';
+our $VERSION = '1.9.0_03';
 
 # Some hashes that store information about Backticks object fields
 my (
